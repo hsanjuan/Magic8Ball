@@ -41,7 +41,13 @@ class Magic8BallBot
                                   :token => auth[:access_token],
                                   :secret => auth[:access_secret]
                                            )
-        @ball = Magic8Ball.new
+        @screen_name = ""
+
+        if @client.authorized?
+            user_info = @client.info
+            @screen_name = user_info['screen_name']
+            puts "Authentication successful: #{@screen_name}"
+        end
     end
 
     # Run the twitter bot
@@ -71,22 +77,42 @@ class Magic8BallBot
         while true do
             begin
                 # Fetch last 20 mentions from the last one answered
-                mentions = @client.mentions({:since_id => last})
+                mentions = @client.mentions({
+                                                :since_id => last,
+                                                :include_entities => true
+                                            })
 
                 mentions.each do | mention |
                     next if !mention['id'] #in case of error, we skip
 
+                    # mark this mention as processed by increasing the last
+                    # id variable
                     mention_id = mention['id'].to_i
-                    username = mention['user']['screen_name']
                     if mention_id > last then last = mention_id end
-                    message = "@#{username}: #{@ball.ask()}"
+
+
+                    # see if question is directly towards us
+                    # if tweet is not starting "@screen_name..." or
+                    # ".@screen_name..." then skip
+                    user_mentions = mention['entities']['user_mentions']
+                    next if !direct_mention?(user_mentions)
+
+                    # user we are answering to...
+                    username = mention['user']['screen_name']
+
+                    # try to answer in user's language
+                    lang = mention['user']['lang'].to_sym
+
+                    # tweet answer
+                    message = "@#{username}: #{Magic8Ball.ask(:lang => lang)}"
                     @client.update(message,
                                    { :in_reply_to_status_id => mention_id})
                 end
 
                 sleep @refresh_interval
-            rescue
+            rescue => e
                 #... avoid any crash
+                # TODO logging
             end
         end
     end
@@ -128,6 +154,21 @@ class Magic8BallBot
             STDERR.reopen "/dev/null", "a"
         else
             Process.daemon
+        end
+    end
+
+    # Checks if a tweet is directed towards us directly, that is,
+    # the tweet starts with our @screen_name or .@screen_name
+    # @param [Array] user_mentions array of user mention entities in the tweet
+    # @return [Boolean] true if our @screen_name is in position 0 or 1
+    def direct_mention?(user_mentions)
+        user_mentions.each do | user_mention |
+            if user_mention['screen_name'] == @screen_name
+                # if our name starting indice is at the 0 or 1 position
+                # then this is a direct mention
+                return true if user_mention['indices'][0].to_i <= 1
+                return false
+            end
         end
     end
 end
